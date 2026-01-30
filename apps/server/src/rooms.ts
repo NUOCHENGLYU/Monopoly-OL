@@ -5,6 +5,11 @@ import { applyAction, createInitialState, createRng } from "@pty/engine";
 
 const ROOM_CODE_LENGTH = 6;
 const MAX_PLAYERS = 6;
+const TURN_DURATION_MS = Math.max(
+  1,
+  Number(process.env.TURN_TIMER ?? 60)
+) * 1000;
+const RECONNECT_WINDOW_MS = 5 * 60 * 1000;
 
 export type RoomState = {
   code: string;
@@ -24,6 +29,7 @@ type PlayerEntry = {
   ready: boolean;
   token: string;
   connected: boolean;
+  disconnectedAt?: number | null;
   socketId: string;
 };
 
@@ -33,6 +39,9 @@ type Room = {
   players: PlayerEntry[];
   gameState: ReturnType<typeof createInitialState> | null;
   rng: (() => number) | null;
+  turnEndsAt?: number | null;
+  turnTimer?: NodeJS.Timeout | null;
+  trades: Map<string, TradeOffer>;
 };
 
 type SocketContext = {
@@ -70,6 +79,32 @@ type RoomHandlersOptions = {
   rngSeed?: number;
 };
 
+type TradeOfferPayload = {
+  roomCode?: string;
+  toPlayerId?: string;
+  offerMoney?: number;
+  requestMoney?: number;
+  offerPropertyIds?: number[];
+  requestPropertyIds?: number[];
+};
+
+type TradeRespondPayload = {
+  roomCode?: string;
+  tradeId?: string;
+  accept?: boolean;
+};
+
+type TradeOffer = {
+  id: string;
+  fromPlayerId: string;
+  toPlayerId: string;
+  offerMoney: number;
+  requestMoney: number;
+  offerPropertyIds: number[];
+  requestPropertyIds: number[];
+  createdAt: number;
+};
+
 export function registerRoomHandlers(io: Server, options?: RoomHandlersOptions) {
   const rooms = new Map<string, Room>();
   const rngSeed = options?.rngSeed;
@@ -77,6 +112,19 @@ export function registerRoomHandlers(io: Server, options?: RoomHandlersOptions) 
   const emitRoomState = (room: Room) => {
     const payload = { room: sanitizeRoom(room) };
     io.to(room.code).emit("room:state", payload);
+  };
+
+  const emitGameState = (room: Room, socket?: Socket) => {
+    if (!room.gameState) return;
+    const payload = {
+      state: room.gameState,
+      turnEndsAt: room.turnEndsAt ?? null
+    };
+    if (socket) {
+      socket.emit("game:state", payload);
+      return;
+    }
+    io.to(room.code).emit("game:state", payload);
   };
 
   const emitRoomStateToSocket = (
@@ -92,6 +140,65 @@ export function registerRoomHandlers(io: Server, options?: RoomHandlersOptions) 
 
   const sendError = (socket: Socket, code: string, message: string) => {
     socket.emit("game:error", { code, message });
+  };
+
+  const sendToast = (room: Room, message: string) => {
+    io.to(room.code).emit("toast", { message });
+  };
+
+  const clearTurnTimer = (room: Room) => {
+    if (room.turnTimer) {
+      clearTimeout(room.turnTimer);
+      room.turnTimer = null;
+    }
+    room.turnEndsAt = null;
+  };
+
+  const scheduleTurnTimer = (room: Room) => {
+    clearTurnTimer(room);
+    if (!room.gameState || room.gameState.winnerId) return;
+
+    room.turnEndsAt = Date.now() + TURN_DURATION_MS;
+    room.turnTimer = setTimeout(() => {
+      if (!room.gameState || room.gameState.winnerId) return;
+      const currentPlayer =
+        room.gameState.players[room.gameState.currentPlayerIndex];
+      if (!currentPlayer) return;
+      const result = applyAction(room.gameState, {
+        type: "END_TURN",
+        playerId: currentPlayer.id
+      });
+      if (result.error) return;
+      room.gameState = {
+        ...result.state,
+        log: [
+          ...result.state.log,
+          `${currentPlayer.name} 回合超时，自动结束。`
+        ]
+      };
+      sendToast(room, `${currentPlayer.name} 回合超时，自动结束。`);
+      if (room.gameState.winnerId) {
+        clearTurnTimer(room);
+        emitGameState(room);
+        return;
+      }
+      scheduleTurnTimer(room);
+      emitGameState(room);
+    }, TURN_DURATION_MS);
+    if (room.turnTimer && typeof room.turnTimer.unref === "function") {
+      room.turnTimer.unref();
+    }
+  };
+
+  const startGame = (room: Room) => {
+    room.gameState = createInitialState(
+      room.players.map((player) => ({ id: player.id, name: player.name }))
+    );
+    room.rng = room.rng ?? createRoomRng(rngSeed);
+    clearTurnTimer(room);
+    scheduleTurnTimer(room);
+    emitRoomState(room);
+    emitGameState(room);
   };
 
   io.on("connection", (socket) => {
@@ -115,7 +222,16 @@ export function registerRoomHandlers(io: Server, options?: RoomHandlersOptions) 
         return;
       }
 
+      if (
+        player.disconnectedAt &&
+        Date.now() - player.disconnectedAt > RECONNECT_WINDOW_MS
+      ) {
+        sendError(socket, "RECONNECT_FAILED", "Reconnect window expired.");
+        return;
+      }
+
       player.connected = true;
+      player.disconnectedAt = null;
       player.socketId = socket.id;
 
       socket.join(roomCode);
@@ -125,7 +241,13 @@ export function registerRoomHandlers(io: Server, options?: RoomHandlersOptions) 
       emitRoomStateToSocket(room, socket, player);
 
       if (room.gameState) {
-        socket.emit("game:state", { state: room.gameState });
+        emitGameState(room, socket);
+      }
+
+      for (const trade of room.trades.values()) {
+        if (trade.toPlayerId === player.id) {
+          socket.emit("trade:offer", { trade });
+        }
       }
     });
 
@@ -144,7 +266,10 @@ export function registerRoomHandlers(io: Server, options?: RoomHandlersOptions) 
         hostId: player.id,
         players: [player],
         gameState: null,
-        rng: null
+        rng: null,
+        turnEndsAt: null,
+        turnTimer: null,
+        trades: new Map()
       };
 
       rooms.set(roomCode, room);
@@ -206,7 +331,7 @@ export function registerRoomHandlers(io: Server, options?: RoomHandlersOptions) 
       emitRoomState(room);
 
       if (room.gameState === null && allPlayersReady(room)) {
-        startGame(room, io, rngSeed);
+        startGame(room);
       }
     });
 
@@ -221,7 +346,139 @@ export function registerRoomHandlers(io: Server, options?: RoomHandlersOptions) 
       }
       if (room.gameState) return;
 
-      startGame(room, io, rngSeed);
+      startGame(room);
+    });
+
+    socket.on("trade:offer", (payload: TradeOfferPayload) => {
+      const context = socket.data as SocketContext;
+      const roomCode = context.roomCode ?? payload?.roomCode?.trim().toUpperCase();
+      if (!roomCode || !context.playerId) {
+        sendError(socket, "INVALID_ACTION", "无法识别房间或玩家。");
+        return;
+      }
+
+      const room = rooms.get(roomCode);
+      if (!room || !room.gameState) {
+        sendError(socket, "GAME_NOT_STARTED", "游戏尚未开始。");
+        return;
+      }
+
+      const fromPlayerId = context.playerId;
+      const toPlayerId = payload?.toPlayerId;
+      if (!toPlayerId || toPlayerId === fromPlayerId) {
+        sendError(socket, "INVALID_ACTION", "交易对象无效。");
+        return;
+      }
+
+      const fromPlayer = room.gameState.players.find(
+        (player) => player.id === fromPlayerId
+      );
+      const toPlayer = room.gameState.players.find(
+        (player) => player.id === toPlayerId
+      );
+      if (!fromPlayer || !toPlayer || fromPlayer.isBankrupt || toPlayer.isBankrupt) {
+        sendError(socket, "INVALID_ACTION", "交易玩家无效。");
+        return;
+      }
+
+      const offerMoney = normalizeMoney(payload?.offerMoney);
+      const requestMoney = normalizeMoney(payload?.requestMoney);
+      const offerPropertyIds = normalizeIdList(payload?.offerPropertyIds);
+      const requestPropertyIds = normalizeIdList(payload?.requestPropertyIds);
+
+      if (
+        offerMoney < 0 ||
+        requestMoney < 0 ||
+        offerMoney > fromPlayer.money ||
+        requestMoney > toPlayer.money
+      ) {
+        sendError(socket, "INVALID_ACTION", "交易金额不合法或余额不足。");
+        return;
+      }
+
+      if (
+        !validatePropertyOwnership(room.gameState, fromPlayerId, offerPropertyIds) ||
+        !validatePropertyOwnership(room.gameState, toPlayerId, requestPropertyIds)
+      ) {
+        sendError(socket, "INVALID_ACTION", "地产归属校验失败。");
+        return;
+      }
+
+      const trade: TradeOffer = {
+        id: crypto.randomUUID(),
+        fromPlayerId,
+        toPlayerId,
+        offerMoney,
+        requestMoney,
+        offerPropertyIds,
+        requestPropertyIds,
+        createdAt: Date.now()
+      };
+
+      room.trades.set(trade.id, trade);
+
+      const target = room.players.find((entry) => entry.id === toPlayerId);
+      if (target?.connected) {
+        io.to(target.socketId).emit("trade:offer", { trade });
+      } else {
+        sendError(socket, "INVALID_ACTION", "对方不在线，无法发起交易。");
+        room.trades.delete(trade.id);
+        return;
+      }
+
+      socket.emit("trade:status", { tradeId: trade.id, status: "sent" });
+    });
+
+    socket.on("trade:respond", (payload: TradeRespondPayload) => {
+      const context = socket.data as SocketContext;
+      const roomCode = context.roomCode ?? payload?.roomCode?.trim().toUpperCase();
+      if (!roomCode || !context.playerId) {
+        sendError(socket, "INVALID_ACTION", "无法识别房间或玩家。");
+        return;
+      }
+
+      const tradeId = payload?.tradeId;
+      if (!tradeId) {
+        sendError(socket, "INVALID_ACTION", "交易不存在。");
+        return;
+      }
+
+      const room = rooms.get(roomCode);
+      if (!room || !room.gameState) {
+        sendError(socket, "GAME_NOT_STARTED", "游戏尚未开始。");
+        return;
+      }
+
+      const trade = room.trades.get(tradeId);
+      if (!trade || trade.toPlayerId !== context.playerId) {
+        sendError(socket, "INVALID_ACTION", "无效的交易响应。");
+        return;
+      }
+
+      room.trades.delete(tradeId);
+
+      if (!payload?.accept) {
+        io.to(room.code).emit("trade:status", {
+          tradeId,
+          status: "declined",
+          trade
+        });
+        return;
+      }
+
+      const applied = applyTrade(room.gameState, trade);
+      if (!applied) {
+        sendError(socket, "INVALID_ACTION", "交易失败，请重新尝试。");
+        return;
+      }
+
+      room.gameState = applied;
+      io.to(room.code).emit("trade:status", {
+        tradeId,
+        status: "accepted",
+        trade
+      });
+      emitGameState(room);
     });
 
     socket.on("game:action", (payload: GameActionPayload) => {
@@ -287,8 +544,19 @@ export function registerRoomHandlers(io: Server, options?: RoomHandlersOptions) 
         return;
       }
 
+      const previousIndex = room.gameState.currentPlayerIndex;
       room.gameState = result.state;
-      io.to(room.code).emit("game:state", { state: room.gameState });
+
+      if (room.gameState.winnerId) {
+        clearTurnTimer(room);
+      } else if (
+        actionType === "END_TURN" ||
+        room.gameState.currentPlayerIndex !== previousIndex
+      ) {
+        scheduleTurnTimer(room);
+      }
+
+      emitGameState(room);
     });
 
     socket.on("disconnect", () => {
@@ -302,18 +570,10 @@ export function registerRoomHandlers(io: Server, options?: RoomHandlersOptions) 
       if (!player) return;
 
       player.connected = false;
+      player.disconnectedAt = Date.now();
       emitRoomState(room);
     });
   });
-}
-
-function startGame(room: Room, io: Server, rngSeed?: number) {
-  room.gameState = createInitialState(
-    room.players.map((player) => ({ id: player.id, name: player.name }))
-  );
-  room.rng = room.rng ?? createRoomRng(rngSeed);
-  io.to(room.code).emit("room:state", { room: sanitizeRoom(room) });
-  io.to(room.code).emit("game:state", { state: room.gameState });
 }
 
 function sanitizeRoom(room: Room): RoomState {
@@ -341,6 +601,7 @@ function createPlayer(name: string, socketId: string): PlayerEntry {
     ready: false,
     token: crypto.randomUUID(),
     connected: true,
+    disconnectedAt: null,
     socketId
   };
 }
@@ -373,4 +634,108 @@ function createRoomRng(seed?: number): () => number {
     return Math.random;
   }
   return createRng(seed);
+}
+
+function normalizeMoney(value?: number) {
+  const amount = Number(value ?? 0);
+  if (!Number.isFinite(amount) || amount < 0) return -1;
+  return Math.floor(amount);
+}
+
+function normalizeIdList(ids?: number[]) {
+  if (!Array.isArray(ids)) return [];
+  const result: number[] = [];
+  for (const raw of ids) {
+    const value = Number(raw);
+    if (!Number.isFinite(value)) continue;
+    if (!result.includes(value)) result.push(value);
+  }
+  return result;
+}
+
+function validatePropertyOwnership(
+  state: ReturnType<typeof createInitialState>,
+  ownerId: string,
+  propertyIds: number[]
+) {
+  if (propertyIds.length === 0) return true;
+  return propertyIds.every((id) => {
+    const space = state.board.find((entry) => entry.id === id);
+    return space?.type === "PROPERTY" && space.ownerId === ownerId;
+  });
+}
+
+function applyTrade(
+  state: ReturnType<typeof createInitialState>,
+  trade: TradeOffer
+) {
+  const board = state.board.map((space) => ({ ...space }));
+  const players = state.players.map((player) => ({
+    ...player,
+    properties: [...player.properties]
+  }));
+
+  const fromPlayer = players.find((player) => player.id === trade.fromPlayerId);
+  const toPlayer = players.find((player) => player.id === trade.toPlayerId);
+  if (!fromPlayer || !toPlayer) return null;
+
+  if (
+    trade.offerMoney > fromPlayer.money ||
+    trade.requestMoney > toPlayer.money
+  ) {
+    return null;
+  }
+
+  if (
+    !validatePropertyOwnership(state, trade.fromPlayerId, trade.offerPropertyIds) ||
+    !validatePropertyOwnership(state, trade.toPlayerId, trade.requestPropertyIds)
+  ) {
+    return null;
+  }
+
+  const removeProperty = (player: typeof fromPlayer, propertyId: number) => {
+    player.properties = player.properties.filter((id) => id !== propertyId);
+  };
+
+  const addProperty = (player: typeof fromPlayer, propertyId: number) => {
+    if (!player.properties.includes(propertyId)) {
+      player.properties.push(propertyId);
+    }
+  };
+
+  const transferProperty = (propertyId: number, newOwnerId: string) => {
+    const space = board.find((entry) => entry.id === propertyId);
+    if (!space) return;
+    space.ownerId = newOwnerId;
+    if (newOwnerId === fromPlayer.id) {
+      removeProperty(toPlayer, propertyId);
+      addProperty(fromPlayer, propertyId);
+    } else {
+      removeProperty(fromPlayer, propertyId);
+      addProperty(toPlayer, propertyId);
+    }
+  };
+
+  for (const id of trade.offerPropertyIds) {
+    transferProperty(id, trade.toPlayerId);
+  }
+
+  for (const id of trade.requestPropertyIds) {
+    transferProperty(id, trade.fromPlayerId);
+  }
+
+  fromPlayer.money -= trade.offerMoney;
+  toPlayer.money += trade.offerMoney;
+  toPlayer.money -= trade.requestMoney;
+  fromPlayer.money += trade.requestMoney;
+
+  return {
+    ...state,
+    board,
+    players,
+    log: [
+      ...state.log,
+      `${fromPlayer.name} 与 ${toPlayer.name} 完成交易。`
+    ]
+  };
 }

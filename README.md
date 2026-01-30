@@ -10,6 +10,7 @@ Monopoly-like online multiplayer board game. This is an original clone (no offic
 - Milestone E: basic gameplay (roll, buy, rent, end turn)
 - Milestone F: jail, tax, and event cards
 - Milestone G: property groups + building houses
+- Milestone H: trading + turn timer + reconnect window
 
 ## Local dev
 1) Install deps

@@ -71,6 +71,22 @@ type GameState = {
   winnerId: string | null;
 };
 
+type GameStatePayload = {
+  state: GameState;
+  turnEndsAt?: number | null;
+};
+
+type TradeOffer = {
+  id: string;
+  fromPlayerId: string;
+  toPlayerId: string;
+  offerMoney: number;
+  requestMoney: number;
+  offerPropertyIds: number[];
+  requestPropertyIds: number[];
+  createdAt: number;
+};
+
 type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
 type Screen = "home" | "lobby" | "game";
@@ -116,6 +132,8 @@ export default function App() {
   );
   const [room, setRoom] = useState<RoomState | null>(null);
   const [gameState, setGameState] = useState<GameState | null>(null);
+  const [turnEndsAt, setTurnEndsAt] = useState<number | null>(null);
+  const [turnRemaining, setTurnRemaining] = useState<number | null>(null);
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [playerToken, setPlayerToken] = useState<string | null>(null);
   const [name, setName] = useState<string>(
@@ -125,6 +143,12 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [selectedSpaceId, setSelectedSpaceId] = useState<number | null>(null);
+  const [tradeTargetId, setTradeTargetId] = useState<string>("");
+  const [offerMoney, setOfferMoney] = useState<string>("0");
+  const [requestMoney, setRequestMoney] = useState<string>("0");
+  const [offerPropertyIds, setOfferPropertyIds] = useState<number[]>([]);
+  const [requestPropertyIds, setRequestPropertyIds] = useState<number[]>([]);
+  const [incomingTrade, setIncomingTrade] = useState<TradeOffer | null>(null);
 
   const socket = useMemo<Socket>(
     () => io(SOCKET_URL, { autoConnect: false }),
@@ -174,10 +198,36 @@ export default function App() {
       setError(message);
     };
 
-    const handleGameState = (payload: { state: GameState }) => {
+    const handleGameState = (payload: GameStatePayload) => {
       setGameState(payload.state);
+      setTurnEndsAt(payload.turnEndsAt ?? null);
       setScreen("game");
       setNotice(null);
+    };
+
+    const handleTradeOffer = (payload: { trade: TradeOffer }) => {
+      setIncomingTrade(payload.trade);
+    };
+
+    const handleTradeStatus = (payload: {
+      tradeId: string;
+      status: string;
+      trade?: TradeOffer;
+    }) => {
+      if (incomingTrade && payload.tradeId === incomingTrade.id) {
+        setIncomingTrade(null);
+      }
+      if (payload.status === "accepted") {
+        setNotice("交易已完成。");
+      } else if (payload.status === "declined") {
+        setNotice("交易已被拒绝。");
+      } else if (payload.status === "sent") {
+        setNotice("交易已发送。");
+      }
+    };
+
+    const handleToast = (payload: { message?: string }) => {
+      if (payload?.message) setNotice(payload.message);
     };
 
     socket.on("connect", handleConnect);
@@ -185,6 +235,9 @@ export default function App() {
     socket.on("room:state", handleRoomState);
     socket.on("game:error", handleError);
     socket.on("game:state", handleGameState);
+    socket.on("trade:offer", handleTradeOffer);
+    socket.on("trade:status", handleTradeStatus);
+    socket.on("toast", handleToast);
 
     socket.connect();
 
@@ -194,6 +247,9 @@ export default function App() {
       socket.off("room:state", handleRoomState);
       socket.off("game:error", handleError);
       socket.off("game:state", handleGameState);
+      socket.off("trade:offer", handleTradeOffer);
+      socket.off("trade:status", handleTradeStatus);
+      socket.off("toast", handleToast);
       socket.disconnect();
     };
   }, [socket]);
@@ -203,6 +259,24 @@ export default function App() {
       socket.connect();
     }
   };
+
+  useEffect(() => {
+    if (!turnEndsAt) {
+      setTurnRemaining(null);
+      return;
+    }
+    const update = () => {
+      const remaining = Math.max(0, Math.ceil((turnEndsAt - Date.now()) / 1000));
+      setTurnRemaining(remaining);
+    };
+    update();
+    const timer = setInterval(update, 500);
+    return () => clearInterval(timer);
+  }, [turnEndsAt]);
+
+  useEffect(() => {
+    setRequestPropertyIds([]);
+  }, [tradeTargetId, gameState]);
 
   const resetLocalSession = () => {
     localStorage.removeItem(STORAGE_KEYS.roomCode);
@@ -214,6 +288,8 @@ export default function App() {
     setError(null);
     setNotice(null);
     setGameState(null);
+    setTurnEndsAt(null);
+    setIncomingTrade(null);
     setSelectedSpaceId(null);
     if (!name.trim()) {
       setError("请输入昵称。");
@@ -228,6 +304,8 @@ export default function App() {
     setError(null);
     setNotice(null);
     setGameState(null);
+    setTurnEndsAt(null);
+    setIncomingTrade(null);
     setSelectedSpaceId(null);
     if (!name.trim()) {
       setError("请输入昵称。");
@@ -258,6 +336,8 @@ export default function App() {
     resetLocalSession();
     setRoom(null);
     setGameState(null);
+    setTurnEndsAt(null);
+    setIncomingTrade(null);
     setSelectedSpaceId(null);
     setScreen("home");
     setPlayerId(null);
@@ -281,6 +361,47 @@ export default function App() {
       roomCode: room.code,
       action: propertyId === undefined ? { type } : { type, propertyId }
     });
+  };
+
+  const handleSendTrade = () => {
+    if (!room || !tradeTargetId) {
+      setError("请选择交易对象。");
+      return;
+    }
+    const offerMoneyValue = Number(offerMoney) || 0;
+    const requestMoneyValue = Number(requestMoney) || 0;
+    socket.emit("trade:offer", {
+      roomCode: room.code,
+      toPlayerId: tradeTargetId,
+      offerMoney: Math.max(0, Math.floor(offerMoneyValue)),
+      requestMoney: Math.max(0, Math.floor(requestMoneyValue)),
+      offerPropertyIds,
+      requestPropertyIds
+    });
+  };
+
+  const handleTradeResponse = (accept: boolean) => {
+    if (!incomingTrade || !room) return;
+    socket.emit("trade:respond", {
+      roomCode: room.code,
+      tradeId: incomingTrade.id,
+      accept
+    });
+    if (!accept) {
+      setIncomingTrade(null);
+    }
+  };
+
+  const toggleOfferProperty = (id: number) => {
+    setOfferPropertyIds((prev) =>
+      prev.includes(id) ? prev.filter((entry) => entry !== id) : [...prev, id]
+    );
+  };
+
+  const toggleRequestProperty = (id: number) => {
+    setRequestPropertyIds((prev) =>
+      prev.includes(id) ? prev.filter((entry) => entry !== id) : [...prev, id]
+    );
   };
 
   const renderConnectionTag = () => {
@@ -309,6 +430,22 @@ export default function App() {
     ? gameState.board.find((space) => space.id === selectedSpaceId) ??
       currentSpace
     : null;
+  const tradeTargets = gameState
+    ? gameState.players.filter(
+        (player) => player.id !== playerId && !player.isBankrupt
+      )
+    : [];
+  const myProperties = gameState
+    ? gameState.board.filter(
+        (space) => space.type === "PROPERTY" && space.ownerId === playerId
+      )
+    : [];
+  const targetProperties = gameState
+    ? gameState.board.filter(
+        (space) =>
+          space.type === "PROPERTY" && space.ownerId === tradeTargetId
+      )
+    : [];
   const isInJail = currentPlayer?.inJail ?? false;
   const hasMonopoly = (group?: string) => {
     if (!gameState || !playerId || !group) return false;
@@ -466,6 +603,7 @@ export default function App() {
                 {currentPlayer?.inJail
                   ? `（监狱中 ${currentPlayer.jailTurns}/${3}）`
                   : ""}
+                {turnRemaining !== null ? ` · 剩余 ${turnRemaining} 秒` : ""}
               </p>
             </div>
             <div className="lobby-actions">
@@ -623,6 +761,107 @@ export default function App() {
                   {selectedSpace.type === "EMPTY" && <p>普通空地。</p>}
                 </div>
               )}
+            </div>
+
+            <div className="panel">
+              <h3>交易</h3>
+              {incomingTrade && (
+                <div className="trade-offer">
+                  <p>
+                    来自{" "}
+                    {
+                      gameState.players.find(
+                        (player) => player.id === incomingTrade.fromPlayerId
+                      )?.name
+                    }
+                    的交易请求
+                  </p>
+                  <p>
+                    对方给你：金币 {incomingTrade.offerMoney} · 地产{" "}
+                    {incomingTrade.offerPropertyIds.length || 0} 个
+                  </p>
+                  <p>
+                    对方想要：金币 {incomingTrade.requestMoney} · 地产{" "}
+                    {incomingTrade.requestPropertyIds.length || 0} 个
+                  </p>
+                  <div className="actions">
+                    <button className="primary" onClick={() => handleTradeResponse(true)}>
+                      接受
+                    </button>
+                    <button onClick={() => handleTradeResponse(false)}>拒绝</button>
+                  </div>
+                </div>
+              )}
+
+              <div className="trade-form">
+                <label>
+                  交易对象
+                  <select
+                    value={tradeTargetId}
+                    onChange={(event) => setTradeTargetId(event.target.value)}
+                  >
+                    <option value="">请选择</option>
+                    {tradeTargets.map((player) => (
+                      <option key={player.id} value={player.id}>
+                        {player.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="trade-grid">
+                  <label>
+                    我给金币
+                    <input
+                      type="number"
+                      min="0"
+                      value={offerMoney}
+                      onChange={(event) => setOfferMoney(event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    我收金币
+                    <input
+                      type="number"
+                      min="0"
+                      value={requestMoney}
+                      onChange={(event) => setRequestMoney(event.target.value)}
+                    />
+                  </label>
+                </div>
+                <div className="trade-list">
+                  <div>
+                    <p className="muted">我提供的地产</p>
+                    {myProperties.length === 0 && <p className="muted">暂无</p>}
+                    {myProperties.map((space) => (
+                      <label key={space.id} className="checkbox">
+                        <input
+                          type="checkbox"
+                          checked={offerPropertyIds.includes(space.id)}
+                          onChange={() => toggleOfferProperty(space.id)}
+                        />
+                        {space.name}
+                      </label>
+                    ))}
+                  </div>
+                  <div>
+                    <p className="muted">我想要的地产</p>
+                    {targetProperties.length === 0 && <p className="muted">暂无</p>}
+                    {targetProperties.map((space) => (
+                      <label key={space.id} className="checkbox">
+                        <input
+                          type="checkbox"
+                          checked={requestPropertyIds.includes(space.id)}
+                          onChange={() => toggleRequestProperty(space.id)}
+                        />
+                        {space.name}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <button className="primary" onClick={handleSendTrade}>
+                  发送报价
+                </button>
+              </div>
             </div>
 
             <div className="panel">

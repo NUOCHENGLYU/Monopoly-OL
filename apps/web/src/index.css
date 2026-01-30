@@ -113,6 +113,14 @@ input {
   font-size: 14px;
 }
 
+select {
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid #d2cbbf;
+  font-size: 14px;
+  background: #ffffff;
+}
+
 .actions {
   display: flex;
   gap: 12px;
@@ -303,4 +311,36 @@ button:disabled {
 
 .detail button {
   margin-top: 8px;
+}
+
+.trade-form {
+  display: grid;
+  gap: 12px;
+}
+
+.trade-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.trade-list {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.trade-offer {
+  background: #fff7e6;
+  border: 1px solid #f4d28c;
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
 }
