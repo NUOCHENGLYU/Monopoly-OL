@@ -6,6 +6,7 @@ Monopoly-like online multiplayer board game. This is an original clone (no offic
 - Milestone A: repo scaffold + server health check + web shell
 - Milestone B: rules engine v0 (board + dice + movement) with Vitest tests
 - Milestone C: Socket.IO room system + server tests
+- Milestone D: Chinese lobby UI + reconnect + ready/start
 
 ## Local dev
 1) Install deps

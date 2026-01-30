@@ -52,6 +52,11 @@ type ReadyPayload = {
   ready: boolean;
 };
 
+type ReconnectPayload = {
+  roomCode: string;
+  playerToken: string;
+};
+
 export function registerRoomHandlers(io: Server) {
   const rooms = new Map<string, Room>();
 
@@ -76,6 +81,40 @@ export function registerRoomHandlers(io: Server) {
   };
 
   io.on("connection", (socket) => {
+    socket.on("game:reconnect", (payload: ReconnectPayload) => {
+      const roomCode = payload?.roomCode?.trim().toUpperCase();
+      const token = payload?.playerToken?.trim();
+      if (!roomCode || !token) {
+        sendError(socket, "INVALID_RECONNECT", "Reconnect data is missing.");
+        return;
+      }
+
+      const room = rooms.get(roomCode);
+      if (!room) {
+        sendError(socket, "ROOM_NOT_FOUND", "Room not found.");
+        return;
+      }
+
+      const player = room.players.find((entry) => entry.token === token);
+      if (!player) {
+        sendError(socket, "RECONNECT_FAILED", "Invalid player token.");
+        return;
+      }
+
+      player.connected = true;
+      player.socketId = socket.id;
+
+      socket.join(roomCode);
+      setSocketContext(socket, roomCode, player.id);
+
+      emitRoomState(room);
+      emitRoomStateToSocket(room, socket, player);
+
+      if (room.gameState) {
+        socket.emit("game:state", { state: room.gameState });
+      }
+    });
+
     socket.on("room:create", (payload: CreateRoomPayload) => {
       const name = payload?.name?.trim();
       if (!name) {
