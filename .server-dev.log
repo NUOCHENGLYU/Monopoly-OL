@@ -1,0 +1,5 @@
+
+> @pty/server@0.0.0 dev /workspaces/Monopoly-OL/apps/server
+> tsx watch src/index.ts
+
+server listening on http://localhost:3001

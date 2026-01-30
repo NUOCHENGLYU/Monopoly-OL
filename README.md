@@ -5,6 +5,7 @@ Monopoly-like online multiplayer board game. This is an original clone (no offic
 ## Status
 - Milestone A: repo scaffold + server health check + web shell
 - Milestone B: rules engine v0 (board + dice + movement) with Vitest tests
+- Milestone C: Socket.IO room system + server tests
 
 ## Local dev
 1) Install deps
@@ -26,6 +27,7 @@ pnpm dev
 - `pnpm dev`: run server + web
 - `pnpm build`: build all packages
 - `pnpm --filter @pty/engine test`: run engine unit tests
+- `pnpm --filter @pty/server test`: run server Socket.IO room tests
 
 ## Structure
 - `apps/server`: Express + TypeScript API server
