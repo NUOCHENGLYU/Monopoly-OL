@@ -41,10 +41,11 @@ type GameErrorPayload = {
 type BoardSpace = {
   id: number;
   name: string;
-  type: "START" | "PROPERTY" | "EMPTY";
+  type: "START" | "PROPERTY" | "EMPTY" | "TAX" | "JAIL" | "GOTO_JAIL" | "CARD";
   cost?: number;
   rentTable?: number[];
   ownerId?: string | null;
+  taxAmount?: number;
 };
 
 type Player = {
@@ -53,6 +54,8 @@ type Player = {
   money: number;
   position: number;
   isBankrupt: boolean;
+  inJail: boolean;
+  jailTurns: number;
 };
 
 type GameState = {
@@ -69,10 +72,16 @@ type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
 type Screen = "home" | "lobby" | "game";
 
+const BAIL_COST = 50;
+
 const spaceTypeLabels: Record<BoardSpace["type"], string> = {
   START: "起点",
   PROPERTY: "地产",
-  EMPTY: "空地"
+  EMPTY: "空地",
+  TAX: "税务",
+  JAIL: "监狱",
+  GOTO_JAIL: "前往监狱",
+  CARD: "事件"
 };
 
 const errorMessages: Record<string, string> = {
@@ -91,6 +100,8 @@ const errorMessages: Record<string, string> = {
   NOT_ROLLED: "请先掷骰。",
   CANNOT_BUY: "当前格子无法购买。",
   NOT_ENOUGH_MONEY: "余额不足。",
+  IN_JAIL: "在监狱中无法执行该操作。",
+  NOT_IN_JAIL: "当前不在监狱中。",
   GAME_OVER: "游戏已结束。"
 };
 
@@ -247,7 +258,9 @@ export default function App() {
     socket.disconnect();
   };
 
-  const handleGameAction = (type: "ROLL_DICE" | "BUY_CURRENT_SPACE" | "END_TURN") => {
+  const handleGameAction = (
+    type: "ROLL_DICE" | "BUY_CURRENT_SPACE" | "PAY_BAIL" | "END_TURN"
+  ) => {
     if (!room) return;
     setError(null);
     socket.emit("game:action", {
@@ -272,18 +285,28 @@ export default function App() {
   const isMyTurn =
     !!gameState &&
     gameState.players[gameState.currentPlayerIndex]?.id === playerId;
-  const currentSpace = gameState
-    ? gameState.board[gameState.players[gameState.currentPlayerIndex].position]
+  const currentPlayer = gameState
+    ? gameState.players[gameState.currentPlayerIndex]
     : null;
+  const currentSpace = gameState && currentPlayer
+    ? gameState.board[currentPlayer.position]
+    : null;
+  const isInJail = currentPlayer?.inJail ?? false;
   const canRoll = isMyTurn && !gameState?.lastRoll && !gameState?.winnerId;
+  const canPayBail =
+    isMyTurn &&
+    isInJail &&
+    !gameState?.lastRoll &&
+    (currentPlayer?.money ?? 0) >= BAIL_COST &&
+    !gameState?.winnerId;
   const canBuy =
     isMyTurn &&
+    !isInJail &&
     !!gameState?.lastRoll &&
     currentSpace?.type === "PROPERTY" &&
     !currentSpace.ownerId &&
     !!currentSpace.cost &&
-    (gameState?.players[gameState.currentPlayerIndex].money ?? 0) >=
-      currentSpace.cost &&
+    (currentPlayer?.money ?? 0) >= currentSpace.cost &&
     !gameState?.winnerId;
   const canEndTurn = isMyTurn && !!gameState?.lastRoll && !gameState?.winnerId;
 
@@ -293,7 +316,7 @@ export default function App() {
         <p className="eyebrow">地产大亨</p>
         <h1>在线联机房间大厅</h1>
         <p className="subhead">
-          先创建/加入房间，再准备并开始游戏。当前版本已支持基础掷骰、买地、收租。
+          先创建/加入房间，再准备并开始游戏。当前版本已支持掷骰、买地、收租、税务与监狱。
         </p>
         <div className="connection">{renderConnectionTag()}</div>
       </header>
@@ -401,11 +424,23 @@ export default function App() {
               <p className="muted">
                 回合 {gameState.turn} · 当前玩家：
                 {gameState.players[gameState.currentPlayerIndex]?.name}
+                {currentPlayer?.inJail
+                  ? `（监狱中 ${currentPlayer.jailTurns}/${3}）`
+                  : ""}
               </p>
             </div>
             <div className="lobby-actions">
-              <button onClick={() => handleGameAction("ROLL_DICE")} disabled={!canRoll}>
-                掷骰
+              <button
+                onClick={() => handleGameAction("PAY_BAIL")}
+                disabled={!canPayBail}
+              >
+                支付保释金 {BAIL_COST}
+              </button>
+              <button
+                onClick={() => handleGameAction("ROLL_DICE")}
+                disabled={!canRoll}
+              >
+                {isInJail ? "尝试出狱" : "掷骰"}
               </button>
               <button onClick={() => handleGameAction("BUY_CURRENT_SPACE")} disabled={!canBuy}>
                 购买地产
@@ -444,6 +479,7 @@ export default function App() {
                     <div className="player-meta">
                       <span>资金 {player.money}</span>
                       <span>位置 {player.position}</span>
+                      {player.inJail && <span className="warn">监狱中</span>}
                     </div>
                   </div>
                 ))}
@@ -475,6 +511,16 @@ export default function App() {
                           <span>
                             归属 {ownerName ?? "无"}
                           </span>
+                        </div>
+                      )}
+                      {space.type === "TAX" && (
+                        <div className="space-meta">
+                          <span>税款 {space.taxAmount ?? 0}</span>
+                        </div>
+                      )}
+                      {space.type === "CARD" && (
+                        <div className="space-meta">
+                          <span>抽取事件卡</span>
                         </div>
                       )}
                     </div>

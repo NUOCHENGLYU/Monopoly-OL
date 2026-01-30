@@ -251,6 +251,7 @@ export function registerRoomHandlers(io: Server, options?: RoomHandlersOptions) 
       if (
         actionType !== "ROLL_DICE" &&
         actionType !== "BUY_CURRENT_SPACE" &&
+        actionType !== "PAY_BAIL" &&
         actionType !== "END_TURN"
       ) {
         sendError(socket, "INVALID_ACTION", "不支持的操作。");

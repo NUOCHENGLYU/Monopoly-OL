@@ -1,4 +1,11 @@
-export type BoardSpaceType = "START" | "PROPERTY" | "EMPTY";
+export type BoardSpaceType =
+  | "START"
+  | "PROPERTY"
+  | "EMPTY"
+  | "TAX"
+  | "JAIL"
+  | "GOTO_JAIL"
+  | "CARD";
 
 export type BoardSpace = {
   id: number;
@@ -8,6 +15,7 @@ export type BoardSpace = {
   rentTable?: number[];
   colorGroup?: string;
   ownerId?: string | null;
+  taxAmount?: number;
 };
 
 export type PlayerInput = {
@@ -52,6 +60,10 @@ export type Action =
       playerId: string;
     }
   | {
+      type: "PAY_BAIL";
+      playerId: string;
+    }
+  | {
       type: "END_TURN";
       playerId: string;
     };
@@ -68,7 +80,9 @@ export type GameErrorCode =
   | "NOT_ROLLED"
   | "CANNOT_BUY"
   | "NOT_ENOUGH_MONEY"
-  | "GAME_OVER";
+  | "GAME_OVER"
+  | "IN_JAIL"
+  | "NOT_IN_JAIL";
 
 export type GameError = {
   code: GameErrorCode;
@@ -80,31 +94,59 @@ export type ApplyResult = {
   error?: GameError;
 };
 
+type CardEffect =
+  | { type: "MONEY"; amount: number }
+  | { type: "MOVE_ABS"; position: number }
+  | { type: "MOVE_REL"; steps: number }
+  | { type: "GOTO_JAIL" };
+
+type Card = {
+  id: string;
+  description: string;
+  effect: CardEffect;
+};
+
 export const STARTING_MONEY = 1500;
 export const START_BONUS = 200;
+export const BAIL_COST = 50;
+export const JAIL_MAX_TURNS = 3;
+const DEFAULT_TAX = 100;
+
+const CARD_DECK: Card[] = [
+  { id: "bonus_stipend", description: "领取补助金 +100", effect: { type: "MONEY", amount: 100 } },
+  { id: "pay_fee", description: "缴纳管理费 -50", effect: { type: "MONEY", amount: -50 } },
+  { id: "festival_bonus", description: "节庆奖励 +150", effect: { type: "MONEY", amount: 150 } },
+  { id: "charity", description: "慈善捐助 -75", effect: { type: "MONEY", amount: -75 } },
+  { id: "advance_start", description: "前往启程广场，并领取起点奖励", effect: { type: "MOVE_ABS", position: 0 } },
+  { id: "advance_three", description: "前进 3 格", effect: { type: "MOVE_REL", steps: 3 } },
+  { id: "step_back", description: "后退 2 格", effect: { type: "MOVE_REL", steps: -2 } },
+  { id: "go_market", description: "前往集市广场", effect: { type: "MOVE_ABS", position: 6 } },
+  { id: "go_hilltop", description: "前往山顶小区", effect: { type: "MOVE_ABS", position: 18 } },
+  { id: "go_to_jail", description: "前往监狱", effect: { type: "GOTO_JAIL" } }
+];
 
 const DEFAULT_BOARD: BoardSpace[] = [
   { id: 0, name: "启程广场", type: "START" },
   { id: 1, name: "港湾路", type: "PROPERTY", cost: 60, rentTable: [2] },
   { id: 2, name: "运河街", type: "PROPERTY", cost: 60, rentTable: [4] },
-  { id: 3, name: "旧城巷", type: "EMPTY" },
+  { id: 3, name: "机遇站", type: "CARD" },
   { id: 4, name: "枫叶大道", type: "PROPERTY", cost: 100, rentTable: [6] },
   { id: 5, name: "落日大道", type: "PROPERTY", cost: 120, rentTable: [8] },
-  { id: 6, name: "集市广场", type: "EMPTY" },
+  { id: 6, name: "税务所", type: "TAX", taxAmount: 100 },
   { id: 7, name: "灯塔路", type: "PROPERTY", cost: 140, rentTable: [10] },
   { id: 8, name: "河畔大道", type: "PROPERTY", cost: 160, rentTable: [12] },
-  { id: 9, name: "节庆广场", type: "EMPTY" },
+  { id: 9, name: "机遇站", type: "CARD" },
   { id: 10, name: "松岭区", type: "PROPERTY", cost: 180, rentTable: [14] },
-  { id: 11, name: "市政中心", type: "EMPTY" },
+  { id: 11, name: "监狱", type: "JAIL" },
   { id: 12, name: "北站街", type: "PROPERTY", cost: 200, rentTable: [16] },
   { id: 13, name: "花园步道", type: "PROPERTY", cost: 220, rentTable: [18] },
-  { id: 14, name: "天际台", type: "EMPTY" },
+  { id: 14, name: "税务所", type: "TAX", taxAmount: 150 },
   { id: 15, name: "东码头", type: "PROPERTY", cost: 240, rentTable: [20] },
   { id: 16, name: "胜利公园", type: "PROPERTY", cost: 260, rentTable: [22] },
-  { id: 17, name: "市中心环路", type: "EMPTY" },
+  { id: 17, name: "机遇站", type: "CARD" },
   { id: 18, name: "山顶小区", type: "PROPERTY", cost: 280, rentTable: [24] },
   { id: 19, name: "宏伟广场", type: "PROPERTY", cost: 300, rentTable: [26] },
-  { id: 20, name: "海滨长廊", type: "EMPTY" },
+  { id: 20, name: "前往监狱", type: "GOTO_JAIL" },
   { id: 21, name: "水晶湾", type: "PROPERTY", cost: 320, rentTable: [28] },
   { id: 22, name: "铁桥街", type: "PROPERTY", cost: 350, rentTable: [35] },
   { id: 23, name: "巅峰庭院", type: "PROPERTY", cost: 400, rentTable: [50] }
@@ -207,63 +249,80 @@ export function applyAction(
         (context?.rngSeed !== undefined
           ? createRng(context.rngSeed)
           : Math.random);
+
       const roll = rollDiceWithRng(rng);
-      const boardSize = state.board.length;
-      const movedPosition = (currentPlayer.position + roll.total) % boardSize;
-      const passedStart = currentPlayer.position + roll.total >= boardSize;
-      let updatedMoney = passedStart
-        ? currentPlayer.money + START_BONUS
-        : currentPlayer.money;
-
-      const updatedBoard = state.board.map((space) => ({ ...space }));
-      const updatedPlayers = state.players.map((player) => ({ ...player }));
+      const updatedBoard = cloneBoard(state.board);
+      const updatedPlayers = clonePlayers(state.players);
       const player = updatedPlayers[state.currentPlayerIndex];
-      player.position = movedPosition;
-      player.money = updatedMoney;
-
       const logEntries: string[] = [];
-      logEntries.push(
-        `${player.name} 掷出了 ${roll.d1} + ${roll.d2}。`
-      );
-      if (passedStart) {
-        logEntries.push(`${player.name} 经过起点，获得 ${START_BONUS}。`);
-      }
 
-      const landedSpace = updatedBoard[movedPosition];
-      if (landedSpace.type === "PROPERTY") {
-        if (landedSpace.ownerId && landedSpace.ownerId !== player.id) {
-          const rent = landedSpace.rentTable?.[0] ?? 0;
-          const ownerIndex = updatedPlayers.findIndex(
-            (entry) => entry.id === landedSpace.ownerId
+      if (player.inJail) {
+        const isDouble = roll.d1 === roll.d2;
+        if (isDouble) {
+          player.inJail = false;
+          player.jailTurns = 0;
+          logEntries.push(`${player.name} 掷出对子，出狱并前进 ${roll.total}。`);
+          moveBy(player, roll.total, logEntries, updatedBoard.length);
+          resolveLanding(
+            player,
+            updatedBoard,
+            updatedPlayers,
+            rng,
+            logEntries,
+            true
           );
-          if (ownerIndex >= 0) {
-            const owner = updatedPlayers[ownerIndex];
-            if (player.money >= rent) {
-              player.money -= rent;
-              owner.money += rent;
+        } else {
+          player.jailTurns += 1;
+          logEntries.push(
+            `${player.name} 未掷出对子，留在监狱（${player.jailTurns}/${JAIL_MAX_TURNS}）。`
+          );
+          if (player.jailTurns >= JAIL_MAX_TURNS) {
+            if (player.money >= BAIL_COST) {
+              player.money -= BAIL_COST;
+              player.inJail = false;
+              player.jailTurns = 0;
               logEntries.push(
-                `${player.name} 向 ${owner.name} 支付租金 ${rent}。`
+                `${player.name} 第三回合未出狱，支付保释金 ${BAIL_COST} 并前进 ${roll.total}。`
+              );
+              moveBy(player, roll.total, logEntries, updatedBoard.length);
+              resolveLanding(
+                player,
+                updatedBoard,
+                updatedPlayers,
+                rng,
+                logEntries,
+                true
               );
             } else {
-              const paid = player.money;
-              player.money = 0;
-              owner.money += paid;
-              player.isBankrupt = true;
-              player.properties = [];
-              updatedBoard.forEach((space) => {
-                if (space.ownerId === player.id) {
-                  space.ownerId = null;
-                }
-              });
-              logEntries.push(
-                `${player.name} 无法支付租金，破产出局。`
-              );
+              handleBankruptcy(player, updatedBoard);
+              logEntries.push(`${player.name} 无法支付保释金，破产出局。`);
             }
           }
-        } else if (!landedSpace.ownerId) {
-          logEntries.push(`${player.name} 停在 ${landedSpace.name}，可购买。`);
         }
+
+        const winnerId = getWinnerId(updatedPlayers);
+        return {
+          state: {
+            ...state,
+            board: updatedBoard,
+            players: updatedPlayers,
+            lastRoll: roll,
+            log: [...state.log, ...logEntries],
+            winnerId
+          }
+        };
       }
+
+      logEntries.push(`${player.name} 掷出了 ${roll.d1} + ${roll.d2}。`);
+      moveBy(player, roll.total, logEntries, updatedBoard.length);
+      resolveLanding(
+        player,
+        updatedBoard,
+        updatedPlayers,
+        rng,
+        logEntries,
+        true
+      );
 
       const winnerId = getWinnerId(updatedPlayers);
 
@@ -285,6 +344,16 @@ export function applyAction(
           error: {
             code: "NOT_ROLLED",
             message: "请先掷骰。"
+          }
+        };
+      }
+
+      if (currentPlayer.inJail) {
+        return {
+          state,
+          error: {
+            code: "IN_JAIL",
+            message: "在监狱中无法购买地产。"
           }
         };
       }
@@ -314,18 +383,12 @@ export function applyAction(
         };
       }
 
-      const updatedBoard = state.board.map((space, index) => {
-        if (index !== currentPlayer.position) return { ...space };
-        return { ...space, ownerId: currentPlayer.id };
-      });
-      const updatedPlayers = state.players.map((player, index) => {
-        if (index !== state.currentPlayerIndex) return { ...player };
-        return {
-          ...player,
-          money: player.money - boardSpace.cost!,
-          properties: [...player.properties, boardSpace.id]
-        };
-      });
+      const updatedBoard = cloneBoard(state.board);
+      const updatedPlayers = clonePlayers(state.players);
+      updatedBoard[currentPlayer.position].ownerId = currentPlayer.id;
+      const player = updatedPlayers[state.currentPlayerIndex];
+      player.money -= boardSpace.cost;
+      player.properties = [...player.properties, boardSpace.id];
 
       const winnerId = getWinnerId(updatedPlayers);
 
@@ -334,16 +397,51 @@ export function applyAction(
           ...state,
           board: updatedBoard,
           players: updatedPlayers,
-          log: [
-            ...state.log,
-            `${currentPlayer.name} 购买了 ${boardSpace.name}。`
-          ],
+          log: [...state.log, `${currentPlayer.name} 购买了 ${boardSpace.name}。`],
+          winnerId
+        }
+      };
+    }
+    case "PAY_BAIL": {
+      if (!currentPlayer.inJail) {
+        return {
+          state,
+          error: {
+            code: "NOT_IN_JAIL",
+            message: "当前不在监狱中。"
+          }
+        };
+      }
+
+      if (currentPlayer.money < BAIL_COST) {
+        return {
+          state,
+          error: {
+            code: "NOT_ENOUGH_MONEY",
+            message: "余额不足，无法支付保释金。"
+          }
+        };
+      }
+
+      const updatedPlayers = clonePlayers(state.players);
+      const player = updatedPlayers[state.currentPlayerIndex];
+      player.money -= BAIL_COST;
+      player.inJail = false;
+      player.jailTurns = 0;
+
+      const winnerId = getWinnerId(updatedPlayers);
+
+      return {
+        state: {
+          ...state,
+          players: updatedPlayers,
+          log: [...state.log, `${player.name} 支付保释金 ${BAIL_COST}，出狱。`],
           winnerId
         }
       };
     }
     case "END_TURN": {
-      const updatedPlayers = state.players.map((player) => ({ ...player }));
+      const updatedPlayers = clonePlayers(state.players);
       const winnerId = getWinnerId(updatedPlayers);
       const logEntry = `${currentPlayer.name} 结束了回合。`;
 
@@ -371,6 +469,178 @@ export function applyAction(
         }
       };
   }
+}
+
+function resolveLanding(
+  player: Player,
+  board: BoardSpace[],
+  players: Player[],
+  rng: () => number,
+  logEntries: string[],
+  allowCard: boolean
+) {
+  if (player.isBankrupt) return;
+
+  const space = board[player.position];
+  switch (space.type) {
+    case "PROPERTY": {
+      if (space.ownerId && space.ownerId !== player.id) {
+        const rent = space.rentTable?.[0] ?? 0;
+        const owner = players.find((entry) => entry.id === space.ownerId);
+        if (owner) {
+          if (player.money >= rent) {
+            player.money -= rent;
+            owner.money += rent;
+            logEntries.push(`${player.name} 向 ${owner.name} 支付租金 ${rent}。`);
+          } else {
+            const paid = player.money;
+            player.money = 0;
+            owner.money += paid;
+            handleBankruptcy(player, board);
+            logEntries.push(`${player.name} 无法支付租金，破产出局。`);
+          }
+        }
+      } else if (!space.ownerId) {
+        logEntries.push(`${player.name} 停在 ${space.name}，可购买。`);
+      }
+      break;
+    }
+    case "TAX": {
+      const amount = space.taxAmount ?? DEFAULT_TAX;
+      if (player.money >= amount) {
+        player.money -= amount;
+        logEntries.push(`${player.name} 支付税款 ${amount}。`);
+      } else {
+        player.money = 0;
+        handleBankruptcy(player, board);
+        logEntries.push(`${player.name} 无法支付税款，破产出局。`);
+      }
+      break;
+    }
+    case "GOTO_JAIL": {
+      sendToJail(player, board, logEntries);
+      break;
+    }
+    case "JAIL": {
+      logEntries.push(`${player.name} 到达监狱（只是探视）。`);
+      break;
+    }
+    case "CARD": {
+      if (!allowCard) return;
+      const card = drawCard(rng);
+      logEntries.push(`事件卡：${card.description}`);
+      applyCardEffect(card.effect, player, board, players, rng, logEntries);
+      break;
+    }
+    case "START":
+    case "EMPTY":
+    default:
+      break;
+  }
+}
+
+function applyCardEffect(
+  effect: CardEffect,
+  player: Player,
+  board: BoardSpace[],
+  players: Player[],
+  rng: () => number,
+  logEntries: string[]
+) {
+  switch (effect.type) {
+    case "MONEY": {
+      const nextMoney = player.money + effect.amount;
+      if (nextMoney >= 0) {
+        player.money = nextMoney;
+        logEntries.push(
+          `${player.name} ${effect.amount >= 0 ? "获得" : "支付"} ${Math.abs(
+            effect.amount
+          )}。`
+        );
+      } else {
+        player.money = 0;
+        handleBankruptcy(player, board);
+        logEntries.push(`${player.name} 无法支付费用，破产出局。`);
+      }
+      break;
+    }
+    case "MOVE_ABS": {
+      const target = normalizePosition(effect.position, board.length);
+      const passedStart = target < player.position;
+      player.position = target;
+      if (passedStart) {
+        player.money += START_BONUS;
+        logEntries.push(`${player.name} 经过起点，获得 ${START_BONUS}。`);
+      }
+      resolveLanding(player, board, players, rng, logEntries, false);
+      break;
+    }
+    case "MOVE_REL": {
+      moveBy(player, effect.steps, logEntries, board.length);
+      resolveLanding(player, board, players, rng, logEntries, false);
+      break;
+    }
+    case "GOTO_JAIL": {
+      sendToJail(player, board, logEntries);
+      break;
+    }
+  }
+}
+
+function moveBy(
+  player: Player,
+  steps: number,
+  logEntries: string[],
+  boardSize: number
+) {
+  const rawPosition = player.position + steps;
+  const passedStart = rawPosition >= boardSize;
+  player.position = normalizePosition(rawPosition, boardSize);
+  if (passedStart) {
+    player.money += START_BONUS;
+    logEntries.push(`${player.name} 经过起点，获得 ${START_BONUS}。`);
+  }
+}
+
+function sendToJail(player: Player, board: BoardSpace[], logEntries: string[]) {
+  const jailIndex = board.findIndex((space) => space.type === "JAIL");
+  if (jailIndex >= 0) {
+    player.position = jailIndex;
+  }
+  player.inJail = true;
+  player.jailTurns = 0;
+  logEntries.push(`${player.name} 被送往监狱。`);
+}
+
+function drawCard(rng: () => number): Card {
+  const index = Math.floor(rng() * CARD_DECK.length);
+  return CARD_DECK[index] ?? CARD_DECK[0];
+}
+
+function normalizePosition(position: number, boardSize: number) {
+  const mod = position % boardSize;
+  return mod < 0 ? mod + boardSize : mod;
+}
+
+function cloneBoard(board: BoardSpace[]) {
+  return board.map((space) => ({ ...space }));
+}
+
+function clonePlayers(players: Player[]) {
+  return players.map((player) => ({
+    ...player,
+    properties: [...player.properties]
+  }));
+}
+
+function handleBankruptcy(player: Player, board: BoardSpace[]) {
+  player.isBankrupt = true;
+  player.properties = [];
+  board.forEach((space) => {
+    if (space.ownerId === player.id) {
+      space.ownerId = null;
+    }
+  });
 }
 
 function getWinnerId(players: Player[]): string | null {

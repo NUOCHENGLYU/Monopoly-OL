@@ -131,7 +131,7 @@ describe("game actions", () => {
 
     let rentOccurred = false;
 
-    for (let step = 0; step < 12; step += 1) {
+    for (let step = 0; step < 20; step += 1) {
       const currentPlayer = localState.players[localState.currentPlayerIndex];
       const actingClient = clientByPlayerId.get(currentPlayer.id);
       if (!actingClient) break;

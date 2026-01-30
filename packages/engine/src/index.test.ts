@@ -56,12 +56,21 @@ describe("applyAction", () => {
   it("allows buying an unowned property", () => {
     const board = [
       { id: 0, name: "Start", type: "START" as const },
-      { id: 1, name: "Test Property", type: "PROPERTY" as const, cost: 100, rentTable: [10] }
+      {
+        id: 1,
+        name: "Test Property",
+        type: "PROPERTY" as const,
+        cost: 100,
+        rentTable: [10]
+      }
     ];
-    const state = createInitialState([
-      { id: "p1", name: "Alice" },
-      { id: "p2", name: "Bob" }
-    ], { board, startingMoney: 500 });
+    const state = createInitialState(
+      [
+        { id: "p1", name: "Alice" },
+        { id: "p2", name: "Bob" }
+      ],
+      { board, startingMoney: 500 }
+    );
 
     const withRoll = {
       ...state,
@@ -85,12 +94,22 @@ describe("applyAction", () => {
     const board = [
       { id: 0, name: "Start", type: "START" as const },
       { id: 1, name: "Empty", type: "EMPTY" as const },
-      { id: 2, name: "Rent Spot", type: "PROPERTY" as const, cost: 100, rentTable: [50], ownerId: "p2" }
+      {
+        id: 2,
+        name: "Rent Spot",
+        type: "PROPERTY" as const,
+        cost: 100,
+        rentTable: [50],
+        ownerId: "p2"
+      }
     ];
-    const state = createInitialState([
-      { id: "p1", name: "Alice" },
-      { id: "p2", name: "Bob" }
-    ], { board, startingMoney: 200 });
+    const state = createInitialState(
+      [
+        { id: "p1", name: "Alice" },
+        { id: "p2", name: "Bob" }
+      ],
+      { board, startingMoney: 200 }
+    );
 
     const result = applyAction(
       state,
@@ -107,13 +126,30 @@ describe("applyAction", () => {
     const board = [
       { id: 0, name: "Start", type: "START" as const },
       { id: 1, name: "Empty", type: "EMPTY" as const },
-      { id: 2, name: "Rent Spot", type: "PROPERTY" as const, cost: 100, rentTable: [80], ownerId: "p2" },
-      { id: 3, name: "Owned", type: "PROPERTY" as const, cost: 100, rentTable: [10], ownerId: "p1" }
+      {
+        id: 2,
+        name: "Rent Spot",
+        type: "PROPERTY" as const,
+        cost: 100,
+        rentTable: [80],
+        ownerId: "p2"
+      },
+      {
+        id: 3,
+        name: "Owned",
+        type: "PROPERTY" as const,
+        cost: 100,
+        rentTable: [10],
+        ownerId: "p1"
+      }
     ];
-    const state = createInitialState([
-      { id: "p1", name: "Alice" },
-      { id: "p2", name: "Bob" }
-    ], { board, startingMoney: 50 });
+    const state = createInitialState(
+      [
+        { id: "p1", name: "Alice" },
+        { id: "p2", name: "Bob" }
+      ],
+      { board, startingMoney: 50 }
+    );
 
     const result = applyAction(
       state,
@@ -125,6 +161,70 @@ describe("applyAction", () => {
     expect(result.state.players[0].money).toBe(0);
     expect(result.state.players[0].isBankrupt).toBe(true);
     expect(result.state.board[3].ownerId).toBe(null);
+  });
+
+  it("charges tax when landing on tax space", () => {
+    const board = [
+      { id: 0, name: "Start", type: "START" as const },
+      { id: 1, name: "Empty", type: "EMPTY" as const },
+      { id: 2, name: "Tax", type: "TAX" as const, taxAmount: 80 }
+    ];
+    const state = createInitialState(
+      [{ id: "p1", name: "Alice" }],
+      { board, startingMoney: 200 }
+    );
+
+    const result = applyAction(
+      state,
+      { type: "ROLL_DICE", playerId: "p1" },
+      { rng: sequenceRng([0, 0]) }
+    );
+
+    expect(result.state.players[0].position).toBe(2);
+    expect(result.state.players[0].money).toBe(120);
+  });
+
+  it("sends player to jail when landing on go-to-jail", () => {
+    const board = [
+      { id: 0, name: "Start", type: "START" as const },
+      { id: 1, name: "Empty", type: "EMPTY" as const },
+      { id: 2, name: "Go To Jail", type: "GOTO_JAIL" as const },
+      { id: 3, name: "Jail", type: "JAIL" as const }
+    ];
+    const state = createInitialState([{ id: "p1", name: "Alice" }], {
+      board,
+      startingMoney: 200
+    });
+
+    const result = applyAction(
+      state,
+      { type: "ROLL_DICE", playerId: "p1" },
+      { rng: sequenceRng([0, 0]) }
+    );
+
+    expect(result.state.players[0].inJail).toBe(true);
+    expect(result.state.players[0].position).toBe(3);
+  });
+
+  it("draws a card and applies money effect", () => {
+    const board = [
+      { id: 0, name: "Start", type: "START" as const },
+      { id: 1, name: "Empty", type: "EMPTY" as const },
+      { id: 2, name: "Card", type: "CARD" as const }
+    ];
+    const state = createInitialState([{ id: "p1", name: "Alice" }], {
+      board,
+      startingMoney: 200
+    });
+
+    const result = applyAction(
+      state,
+      { type: "ROLL_DICE", playerId: "p1" },
+      { rng: sequenceRng([0, 0, 0]) }
+    );
+
+    expect(result.state.players[0].position).toBe(2);
+    expect(result.state.players[0].money).toBe(300);
   });
 
   it("rejects actions from non-current players", () => {

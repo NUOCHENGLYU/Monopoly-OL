@@ -8,6 +8,7 @@ Monopoly-like online multiplayer board game. This is an original clone (no offic
 - Milestone C: Socket.IO room system + server tests
 - Milestone D: Chinese lobby UI + reconnect + ready/start
 - Milestone E: basic gameplay (roll, buy, rent, end turn)
+- Milestone F: jail, tax, and event cards
 
 ## Local dev
 1) Install deps
