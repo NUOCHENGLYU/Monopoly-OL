@@ -44,7 +44,10 @@ type BoardSpace = {
   type: "START" | "PROPERTY" | "EMPTY" | "TAX" | "JAIL" | "GOTO_JAIL" | "CARD";
   cost?: number;
   rentTable?: number[];
+  colorGroup?: string;
+  buildCost?: number;
   ownerId?: string | null;
+  houses?: number;
   taxAmount?: number;
 };
 
@@ -99,6 +102,7 @@ const errorMessages: Record<string, string> = {
   ALREADY_ROLLED: "本回合已掷骰。",
   NOT_ROLLED: "请先掷骰。",
   CANNOT_BUY: "当前格子无法购买。",
+  CANNOT_BUILD: "无法建造房屋。",
   NOT_ENOUGH_MONEY: "余额不足。",
   IN_JAIL: "在监狱中无法执行该操作。",
   NOT_IN_JAIL: "当前不在监狱中。",
@@ -120,6 +124,7 @@ export default function App() {
   const [roomCodeInput, setRoomCodeInput] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [selectedSpaceId, setSelectedSpaceId] = useState<number | null>(null);
 
   const socket = useMemo<Socket>(
     () => io(SOCKET_URL, { autoConnect: false }),
@@ -209,6 +214,7 @@ export default function App() {
     setError(null);
     setNotice(null);
     setGameState(null);
+    setSelectedSpaceId(null);
     if (!name.trim()) {
       setError("请输入昵称。");
       return;
@@ -222,6 +228,7 @@ export default function App() {
     setError(null);
     setNotice(null);
     setGameState(null);
+    setSelectedSpaceId(null);
     if (!name.trim()) {
       setError("请输入昵称。");
       return;
@@ -251,6 +258,7 @@ export default function App() {
     resetLocalSession();
     setRoom(null);
     setGameState(null);
+    setSelectedSpaceId(null);
     setScreen("home");
     setPlayerId(null);
     setPlayerToken(null);
@@ -259,13 +267,19 @@ export default function App() {
   };
 
   const handleGameAction = (
-    type: "ROLL_DICE" | "BUY_CURRENT_SPACE" | "PAY_BAIL" | "END_TURN"
+    type:
+      | "ROLL_DICE"
+      | "BUY_CURRENT_SPACE"
+      | "PAY_BAIL"
+      | "BUILD_HOUSE"
+      | "END_TURN",
+    propertyId?: number
   ) => {
     if (!room) return;
     setError(null);
     socket.emit("game:action", {
       roomCode: room.code,
-      action: { type }
+      action: propertyId === undefined ? { type } : { type, propertyId }
     });
   };
 
@@ -291,7 +305,21 @@ export default function App() {
   const currentSpace = gameState && currentPlayer
     ? gameState.board[currentPlayer.position]
     : null;
+  const selectedSpace = gameState
+    ? gameState.board.find((space) => space.id === selectedSpaceId) ??
+      currentSpace
+    : null;
   const isInJail = currentPlayer?.inJail ?? false;
+  const hasMonopoly = (group?: string) => {
+    if (!gameState || !playerId || !group) return false;
+    const groupSpaces = gameState.board.filter(
+      (space) => space.type === "PROPERTY" && space.colorGroup === group
+    );
+    return (
+      groupSpaces.length > 0 &&
+      groupSpaces.every((space) => space.ownerId === playerId)
+    );
+  };
   const canRoll = isMyTurn && !gameState?.lastRoll && !gameState?.winnerId;
   const canPayBail =
     isMyTurn &&
@@ -307,6 +335,17 @@ export default function App() {
     !currentSpace.ownerId &&
     !!currentSpace.cost &&
     (currentPlayer?.money ?? 0) >= currentSpace.cost &&
+    !gameState?.winnerId;
+  const canBuildHouse =
+    isMyTurn &&
+    !isInJail &&
+    !!selectedSpace &&
+    selectedSpace.type === "PROPERTY" &&
+    selectedSpace.ownerId === playerId &&
+    hasMonopoly(selectedSpace.colorGroup) &&
+    (selectedSpace.houses ?? 0) < 4 &&
+    (selectedSpace.buildCost ?? 0) > 0 &&
+    (currentPlayer?.money ?? 0) >= (selectedSpace.buildCost ?? 0) &&
     !gameState?.winnerId;
   const canEndTurn = isMyTurn && !!gameState?.lastRoll && !gameState?.winnerId;
 
@@ -496,8 +535,15 @@ export default function App() {
                   const active =
                     gameState.players[gameState.currentPlayerIndex]?.position ===
                     index;
+                  const selected = selectedSpace?.id === space.id;
                   return (
-                    <div key={space.id} className={`space ${active ? "active" : ""}`}>
+                    <div
+                      key={space.id}
+                      className={`space ${active ? "active" : ""} ${
+                        selected ? "selected" : ""
+                      }`}
+                      onClick={() => setSelectedSpaceId(space.id)}
+                    >
                       <div className="space-title">
                         <strong>{space.name}</strong>
                         <span className="space-type">
@@ -507,10 +553,13 @@ export default function App() {
                       {space.type === "PROPERTY" && (
                         <div className="space-meta">
                           <span>价格 {space.cost}</span>
-                          <span>租金 {space.rentTable?.[0] ?? 0}</span>
+                          <span>
+                            租金 {space.rentTable?.[space.houses ?? 0] ?? 0}
+                          </span>
                           <span>
                             归属 {ownerName ?? "无"}
                           </span>
+                          <span>房屋 {space.houses ?? 0}</span>
                         </div>
                       )}
                       {space.type === "TAX" && (
@@ -527,6 +576,53 @@ export default function App() {
                   );
                 })}
               </div>
+            </div>
+
+            <div className="panel">
+              <h3>地产详情</h3>
+              {!selectedSpace && (
+                <p className="muted">点击棋盘格查看详情。</p>
+              )}
+              {selectedSpace && (
+                <div className="detail">
+                  <p>
+                    <strong>{selectedSpace.name}</strong> ·{" "}
+                    {spaceTypeLabels[selectedSpace.type]}
+                  </p>
+                  {selectedSpace.type === "PROPERTY" && (
+                    <>
+                      <p>归属：{selectedSpace.ownerId ? (gameState.players.find((p) => p.id === selectedSpace.ownerId)?.name ?? "未知") : "无"}</p>
+                      <p>组别：{selectedSpace.colorGroup ?? "无"}</p>
+                      <p>房屋：{selectedSpace.houses ?? 0}</p>
+                      <p>当前租金：{selectedSpace.rentTable?.[selectedSpace.houses ?? 0] ?? 0}</p>
+                      <p>建造费用：{selectedSpace.buildCost ?? "-"}</p>
+                      <button
+                        onClick={() =>
+                          handleGameAction("BUILD_HOUSE", selectedSpace.id)
+                        }
+                        disabled={!canBuildHouse}
+                      >
+                        建造房屋
+                      </button>
+                      {!hasMonopoly(selectedSpace.colorGroup) && (
+                        <p className="hint">需要先垄断该组全部地产。</p>
+                      )}
+                    </>
+                  )}
+                  {selectedSpace.type === "TAX" && (
+                    <p>税款：{selectedSpace.taxAmount ?? 0}</p>
+                  )}
+                  {selectedSpace.type === "CARD" && (
+                    <p>抽取事件卡并触发效果。</p>
+                  )}
+                  {selectedSpace.type === "JAIL" && <p>监狱（探视或关押）。</p>}
+                  {selectedSpace.type === "GOTO_JAIL" && (
+                    <p>到此格会被送往监狱。</p>
+                  )}
+                  {selectedSpace.type === "START" && <p>经过起点可获得奖励。</p>}
+                  {selectedSpace.type === "EMPTY" && <p>普通空地。</p>}
+                </div>
+              )}
             </div>
 
             <div className="panel">

@@ -61,7 +61,9 @@ describe("applyAction", () => {
         name: "Test Property",
         type: "PROPERTY" as const,
         cost: 100,
-        rentTable: [10]
+        rentTable: [10, 20, 30, 40, 50],
+        colorGroup: "A",
+        buildCost: 50
       }
     ];
     const state = createInitialState(
@@ -99,8 +101,10 @@ describe("applyAction", () => {
         name: "Rent Spot",
         type: "PROPERTY" as const,
         cost: 100,
-        rentTable: [50],
-        ownerId: "p2"
+        rentTable: [50, 100, 150, 200, 250],
+        ownerId: "p2",
+        colorGroup: "A",
+        buildCost: 50
       }
     ];
     const state = createInitialState(
@@ -122,6 +126,87 @@ describe("applyAction", () => {
     expect(result.state.players[1].money).toBe(250);
   });
 
+  it("uses house count to calculate rent", () => {
+    const board = [
+      { id: 0, name: "Start", type: "START" as const },
+      { id: 1, name: "Empty", type: "EMPTY" as const },
+      {
+        id: 2,
+        name: "Rent Spot",
+        type: "PROPERTY" as const,
+        cost: 100,
+        rentTable: [10, 25, 40, 60, 90],
+        ownerId: "p2",
+        houses: 1,
+        colorGroup: "A",
+        buildCost: 50
+      }
+    ];
+    const state = createInitialState(
+      [
+        { id: "p1", name: "Alice" },
+        { id: "p2", name: "Bob" }
+      ],
+      { board, startingMoney: 200 }
+    );
+
+    const result = applyAction(
+      state,
+      { type: "ROLL_DICE", playerId: "p1" },
+      { rng: sequenceRng([0, 0]) }
+    );
+
+    expect(result.state.players[0].position).toBe(2);
+    expect(result.state.players[0].money).toBe(175);
+    expect(result.state.players[1].money).toBe(225);
+  });
+
+  it("allows building when player owns the full group", () => {
+    const board = [
+      { id: 0, name: "Start", type: "START" as const },
+      {
+        id: 1,
+        name: "A1",
+        type: "PROPERTY" as const,
+        cost: 100,
+        rentTable: [10, 20, 30, 40, 50],
+        colorGroup: "A",
+        buildCost: 50,
+        ownerId: "p1"
+      },
+      {
+        id: 2,
+        name: "A2",
+        type: "PROPERTY" as const,
+        cost: 100,
+        rentTable: [12, 24, 36, 48, 60],
+        colorGroup: "A",
+        buildCost: 50,
+        ownerId: "p1"
+      }
+    ];
+    const state = createInitialState(
+      [
+        { id: "p1", name: "Alice" },
+        { id: "p2", name: "Bob" }
+      ],
+      { board, startingMoney: 200 }
+    );
+
+    const updatedPlayers = state.players.map((player, index) =>
+      index === 0 ? { ...player, properties: [1, 2] } : player
+    );
+
+    const result = applyAction(
+      { ...state, players: updatedPlayers },
+      { type: "BUILD_HOUSE", playerId: "p1", propertyId: 1 }
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.state.board[1].houses).toBe(1);
+    expect(result.state.players[0].money).toBe(150);
+  });
+
   it("marks player bankrupt if they cannot pay rent", () => {
     const board = [
       { id: 0, name: "Start", type: "START" as const },
@@ -131,16 +216,20 @@ describe("applyAction", () => {
         name: "Rent Spot",
         type: "PROPERTY" as const,
         cost: 100,
-        rentTable: [80],
-        ownerId: "p2"
+        rentTable: [80, 120, 180, 240, 300],
+        ownerId: "p2",
+        colorGroup: "A",
+        buildCost: 50
       },
       {
         id: 3,
         name: "Owned",
         type: "PROPERTY" as const,
         cost: 100,
-        rentTable: [10],
-        ownerId: "p1"
+        rentTable: [10, 20, 30, 40, 50],
+        ownerId: "p1",
+        colorGroup: "B",
+        buildCost: 50
       }
     ];
     const state = createInitialState(

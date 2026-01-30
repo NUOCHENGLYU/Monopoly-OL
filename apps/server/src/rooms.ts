@@ -62,6 +62,7 @@ type GameActionPayload = {
   roomCode?: string;
   action?: {
     type?: string;
+    propertyId?: number;
   };
 };
 
@@ -252,15 +253,32 @@ export function registerRoomHandlers(io: Server, options?: RoomHandlersOptions) 
         actionType !== "ROLL_DICE" &&
         actionType !== "BUY_CURRENT_SPACE" &&
         actionType !== "PAY_BAIL" &&
+        actionType !== "BUILD_HOUSE" &&
         actionType !== "END_TURN"
       ) {
         sendError(socket, "INVALID_ACTION", "不支持的操作。");
         return;
       }
 
+      const actionPayload = payload?.action ?? {};
+      let actionData: any = { type: actionType, playerId: context.playerId };
+      if (actionType === "BUILD_HOUSE") {
+        const rawId = actionPayload.propertyId;
+        const propertyId = typeof rawId === "number" ? rawId : Number(rawId);
+        if (!Number.isFinite(propertyId)) {
+          sendError(socket, "INVALID_ACTION", "缺少地产编号。");
+          return;
+        }
+        actionData = {
+          type: actionType,
+          playerId: context.playerId,
+          propertyId
+        };
+      }
+
       const result = applyAction(
         room.gameState,
-        { type: actionType, playerId: context.playerId },
+        actionData,
         actionType === "ROLL_DICE" ? { rng: room.rng ?? Math.random } : undefined
       );
 

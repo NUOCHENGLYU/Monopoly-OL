@@ -14,7 +14,9 @@ export type BoardSpace = {
   cost?: number;
   rentTable?: number[];
   colorGroup?: string;
+  buildCost?: number;
   ownerId?: string | null;
+  houses?: number;
   taxAmount?: number;
 };
 
@@ -64,6 +66,11 @@ export type Action =
       playerId: string;
     }
   | {
+      type: "BUILD_HOUSE";
+      playerId: string;
+      propertyId: number;
+    }
+  | {
       type: "END_TURN";
       playerId: string;
     };
@@ -79,6 +86,7 @@ export type GameErrorCode =
   | "ALREADY_ROLLED"
   | "NOT_ROLLED"
   | "CANNOT_BUY"
+  | "CANNOT_BUILD"
   | "NOT_ENOUGH_MONEY"
   | "GAME_OVER"
   | "IN_JAIL"
@@ -112,44 +120,105 @@ export const BAIL_COST = 50;
 export const JAIL_MAX_TURNS = 3;
 const DEFAULT_TAX = 100;
 
+const rentTable = (base: number) => [
+  base,
+  base * 5,
+  base * 15,
+  base * 30,
+  base * 50
+];
+
+const property = (
+  id: number,
+  name: string,
+  cost: number,
+  baseRent: number,
+  colorGroup: string,
+  buildCost: number
+): BoardSpace => ({
+  id,
+  name,
+  type: "PROPERTY",
+  cost,
+  rentTable: rentTable(baseRent),
+  colorGroup,
+  buildCost
+});
+
 const CARD_DECK: Card[] = [
-  { id: "bonus_stipend", description: "领取补助金 +100", effect: { type: "MONEY", amount: 100 } },
-  { id: "pay_fee", description: "缴纳管理费 -50", effect: { type: "MONEY", amount: -50 } },
-  { id: "festival_bonus", description: "节庆奖励 +150", effect: { type: "MONEY", amount: 150 } },
-  { id: "charity", description: "慈善捐助 -75", effect: { type: "MONEY", amount: -75 } },
-  { id: "advance_start", description: "前往启程广场，并领取起点奖励", effect: { type: "MOVE_ABS", position: 0 } },
-  { id: "advance_three", description: "前进 3 格", effect: { type: "MOVE_REL", steps: 3 } },
-  { id: "step_back", description: "后退 2 格", effect: { type: "MOVE_REL", steps: -2 } },
-  { id: "go_market", description: "前往集市广场", effect: { type: "MOVE_ABS", position: 6 } },
-  { id: "go_hilltop", description: "前往山顶小区", effect: { type: "MOVE_ABS", position: 18 } },
+  {
+    id: "bonus_stipend",
+    description: "领取补助金 +100",
+    effect: { type: "MONEY", amount: 100 }
+  },
+  {
+    id: "pay_fee",
+    description: "缴纳管理费 -50",
+    effect: { type: "MONEY", amount: -50 }
+  },
+  {
+    id: "festival_bonus",
+    description: "节庆奖励 +150",
+    effect: { type: "MONEY", amount: 150 }
+  },
+  {
+    id: "charity",
+    description: "慈善捐助 -75",
+    effect: { type: "MONEY", amount: -75 }
+  },
+  {
+    id: "advance_start",
+    description: "前往启程广场，并领取起点奖励",
+    effect: { type: "MOVE_ABS", position: 0 }
+  },
+  {
+    id: "advance_three",
+    description: "前进 3 格",
+    effect: { type: "MOVE_REL", steps: 3 }
+  },
+  {
+    id: "step_back",
+    description: "后退 2 格",
+    effect: { type: "MOVE_REL", steps: -2 }
+  },
+  {
+    id: "go_market",
+    description: "前往集市广场",
+    effect: { type: "MOVE_ABS", position: 6 }
+  },
+  {
+    id: "go_hilltop",
+    description: "前往山顶小区",
+    effect: { type: "MOVE_ABS", position: 18 }
+  },
   { id: "go_to_jail", description: "前往监狱", effect: { type: "GOTO_JAIL" } }
 ];
 
 const DEFAULT_BOARD: BoardSpace[] = [
   { id: 0, name: "启程广场", type: "START" },
-  { id: 1, name: "港湾路", type: "PROPERTY", cost: 60, rentTable: [2] },
-  { id: 2, name: "运河街", type: "PROPERTY", cost: 60, rentTable: [4] },
+  property(1, "港湾路", 60, 2, "港区", 50),
+  property(2, "运河街", 60, 4, "港区", 50),
   { id: 3, name: "机遇站", type: "CARD" },
-  { id: 4, name: "枫叶大道", type: "PROPERTY", cost: 100, rentTable: [6] },
-  { id: 5, name: "落日大道", type: "PROPERTY", cost: 120, rentTable: [8] },
+  property(4, "枫叶大道", 100, 6, "枫林", 50),
+  property(5, "落日大道", 120, 8, "枫林", 50),
   { id: 6, name: "税务所", type: "TAX", taxAmount: 100 },
-  { id: 7, name: "灯塔路", type: "PROPERTY", cost: 140, rentTable: [10] },
-  { id: 8, name: "河畔大道", type: "PROPERTY", cost: 160, rentTable: [12] },
+  property(7, "灯塔路", 140, 10, "灯塔", 100),
+  property(8, "河畔大道", 160, 12, "灯塔", 100),
   { id: 9, name: "机遇站", type: "CARD" },
-  { id: 10, name: "松岭区", type: "PROPERTY", cost: 180, rentTable: [14] },
+  property(10, "松岭区", 180, 14, "松岭", 100),
   { id: 11, name: "监狱", type: "JAIL" },
-  { id: 12, name: "北站街", type: "PROPERTY", cost: 200, rentTable: [16] },
-  { id: 13, name: "花园步道", type: "PROPERTY", cost: 220, rentTable: [18] },
+  property(12, "北站街", 200, 16, "松岭", 100),
+  property(13, "花园步道", 220, 18, "花园", 150),
   { id: 14, name: "税务所", type: "TAX", taxAmount: 150 },
-  { id: 15, name: "东码头", type: "PROPERTY", cost: 240, rentTable: [20] },
-  { id: 16, name: "胜利公园", type: "PROPERTY", cost: 260, rentTable: [22] },
+  property(15, "东码头", 240, 20, "花园", 150),
+  property(16, "胜利公园", 260, 22, "胜利", 150),
   { id: 17, name: "机遇站", type: "CARD" },
-  { id: 18, name: "山顶小区", type: "PROPERTY", cost: 280, rentTable: [24] },
-  { id: 19, name: "宏伟广场", type: "PROPERTY", cost: 300, rentTable: [26] },
+  property(18, "山顶小区", 280, 24, "胜利", 150),
+  property(19, "宏伟广场", 300, 26, "宏伟", 200),
   { id: 20, name: "前往监狱", type: "GOTO_JAIL" },
-  { id: 21, name: "水晶湾", type: "PROPERTY", cost: 320, rentTable: [28] },
-  { id: 22, name: "铁桥街", type: "PROPERTY", cost: 350, rentTable: [35] },
-  { id: 23, name: "巅峰庭院", type: "PROPERTY", cost: 400, rentTable: [50] }
+  property(21, "水晶湾", 320, 28, "宏伟", 200),
+  property(22, "铁桥街", 350, 35, "巅峰", 200),
+  property(23, "巅峰庭院", 400, 50, "巅峰", 200)
 ];
 
 export function createInitialState(
@@ -158,7 +227,8 @@ export function createInitialState(
 ): GameState {
   const board = (options?.board ?? DEFAULT_BOARD).map((space) => ({
     ...space,
-    ownerId: space.ownerId ?? null
+    ownerId: space.ownerId ?? null,
+    houses: space.houses ?? 0
   }));
   const startingMoney = options?.startingMoney ?? STARTING_MONEY;
 
@@ -440,6 +510,118 @@ export function applyAction(
         }
       };
     }
+    case "BUILD_HOUSE": {
+      if (currentPlayer.inJail) {
+        return {
+          state,
+          error: {
+            code: "IN_JAIL",
+            message: "在监狱中无法建造房屋。"
+          }
+        };
+      }
+
+      const targetIndex = state.board.findIndex(
+        (space) => space.id === action.propertyId
+      );
+      if (targetIndex < 0) {
+        return {
+          state,
+          error: {
+            code: "CANNOT_BUILD",
+            message: "未找到目标地产。"
+          }
+        };
+      }
+
+      const targetSpace = state.board[targetIndex];
+      if (
+        targetSpace.type !== "PROPERTY" ||
+        targetSpace.ownerId !== currentPlayer.id
+      ) {
+        return {
+          state,
+          error: {
+            code: "CANNOT_BUILD",
+            message: "只能在自己的地产上建房。"
+          }
+        };
+      }
+
+      if (!targetSpace.colorGroup) {
+        return {
+          state,
+          error: {
+            code: "CANNOT_BUILD",
+            message: "该地产不可建房。"
+          }
+        };
+      }
+
+      if (!hasMonopoly(currentPlayer.id, state.board, targetSpace.colorGroup)) {
+        return {
+          state,
+          error: {
+            code: "CANNOT_BUILD",
+            message: "未垄断该地产组，无法建房。"
+          }
+        };
+      }
+
+      const currentHouses = targetSpace.houses ?? 0;
+      if (currentHouses >= 4) {
+        return {
+          state,
+          error: {
+            code: "CANNOT_BUILD",
+            message: "该地产已达到房屋上限。"
+          }
+        };
+      }
+
+      const cost = targetSpace.buildCost ?? 0;
+      if (cost <= 0) {
+        return {
+          state,
+          error: {
+            code: "CANNOT_BUILD",
+            message: "该地产无法建房。"
+          }
+        };
+      }
+
+      if (currentPlayer.money < cost) {
+        return {
+          state,
+          error: {
+            code: "NOT_ENOUGH_MONEY",
+            message: "余额不足，无法建房。"
+          }
+        };
+      }
+
+      const updatedBoard = cloneBoard(state.board);
+      const updatedPlayers = clonePlayers(state.players);
+      const player = updatedPlayers[state.currentPlayerIndex];
+
+      updatedBoard[targetIndex].houses = currentHouses + 1;
+      player.money -= cost;
+
+      const winnerId = getWinnerId(updatedPlayers);
+
+      return {
+        state: {
+          ...state,
+          board: updatedBoard,
+          players: updatedPlayers,
+          log: [
+            ...state.log,
+            `${player.name} 在 ${targetSpace.name} 建造了 1 栋房屋（共 ${currentHouses + 1} 栋）。`
+          ],
+          winnerId
+        }
+      };
+    }
     case "END_TURN": {
       const updatedPlayers = clonePlayers(state.players);
       const winnerId = getWinnerId(updatedPlayers);
@@ -485,7 +667,9 @@ function resolveLanding(
   switch (space.type) {
     case "PROPERTY": {
       if (space.ownerId && space.ownerId !== player.id) {
-        const rent = space.rentTable?.[0] ?? 0;
+        const houses = space.houses ?? 0;
+        const rent =
+          space.rentTable?.[houses] ?? space.rentTable?.[0] ?? 0;
         const owner = players.find((entry) => entry.id === space.ownerId);
         if (owner) {
           if (player.money >= rent) {
@@ -639,8 +823,19 @@ function handleBankruptcy(player: Player, board: BoardSpace[]) {
   board.forEach((space) => {
     if (space.ownerId === player.id) {
       space.ownerId = null;
+      space.houses = 0;
     }
   });
+}
+
+function hasMonopoly(playerId: string, board: BoardSpace[], group: string) {
+  const groupSpaces = board.filter(
+    (space) => space.type === "PROPERTY" && space.colorGroup === group
+  );
+  return (
+    groupSpaces.length > 0 &&
+    groupSpaces.every((space) => space.ownerId === playerId)
+  );
 }
 
 function getWinnerId(players: Player[]): string | null {
