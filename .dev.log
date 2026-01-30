@@ -1,0 +1,18 @@
+
+> property-tycoon@0.0.0 dev /workspaces/Monopoly-OL
+> concurrently -n server,web -c green,blue "pnpm --filter @pty/server dev" "pnpm --filter @pty/web dev"
+
+[web] 
+[web] > @pty/web@0.0.0 dev /workspaces/Monopoly-OL/apps/web
+[web] > vite
+[web] 
+[server] 
+[server] > @pty/server@0.0.0 dev /workspaces/Monopoly-OL/apps/server
+[server] > tsx watch src/index.ts
+[server] 
+[web] 
+[web]   VITE v5.4.21  ready in 319 ms
+[web] 
+[web]   ➜  Local:   http://localhost:5173/
+[web]   ➜  Network: use --host to expose
+[server] server listening on http://localhost:3001

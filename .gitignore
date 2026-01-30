@@ -1,0 +1,14 @@
+node_modules
+.pnpm-store
+.DS_Store
+.env
+.env.local
+.dist
+
+# build outputs
+apps/server/dist
+apps/web/dist
+packages/engine/dist
+
+# vite
+apps/web/.vite

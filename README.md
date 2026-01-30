@@ -1,1 +1,31 @@
-# Monopoly-OL
+# Property Tycoon
+
+Monopoly-like online multiplayer board game. This is an original clone (no official names, art, or card text).
+
+## Status
+- Milestone A: repo scaffold + server health check + web shell
+
+## Local dev
+1) Install deps
+
+```bash
+pnpm i
+```
+
+2) Run dev servers
+
+```bash
+pnpm dev
+```
+
+- Server: http://localhost:3001/health -> {"ok": true}
+- Web: use the Vite URL printed in the terminal (shows "Property Tycoon" and server status)
+
+## Scripts
+- `pnpm dev`: run server + web
+- `pnpm build`: build all packages
+
+## Structure
+- `apps/server`: Express + TypeScript API server
+- `apps/web`: Vite + React frontend
+- `packages/engine`: rules engine (placeholder for now)
