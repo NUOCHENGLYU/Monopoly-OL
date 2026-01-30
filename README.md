@@ -11,6 +11,7 @@ Monopoly-like online multiplayer board game. This is an original clone (no offic
 - Milestone F: jail, tax, and event cards
 - Milestone G: property groups + building houses
 - Milestone H: trading + turn timer + reconnect window
+- Milestone I: deployable build + UI polish baseline
 
 ## Local dev
 1) Install deps
@@ -33,6 +34,25 @@ pnpm dev
 - `pnpm build`: build all packages
 - `pnpm --filter @pty/engine test`: run engine unit tests
 - `pnpm --filter @pty/server test`: run server Socket.IO room tests
+
+## Deployment (Docker)
+Build and run:
+
+```bash
+docker compose up --build
+```
+
+Then open:
+- http://localhost:3001 (web UI)
+- http://localhost:3001/health
+
+### Environment variables
+- `PORT`: server port (default 3001)
+- `CORS_ORIGIN`: allowed origins, comma-separated or `*`
+- `TURN_TIMER`: turn timer in seconds (default 60)
+- `SEED_MODE`: `fixed` to enable deterministic RNG (use with `RNG_SEED`)
+- `RNG_SEED`: integer seed used when `SEED_MODE=fixed`
+- `STATIC_DIR`: static build path (default `/app/apps/web/dist` in Docker)
 
 ## Structure
 - `apps/server`: Express + TypeScript API server

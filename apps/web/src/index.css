@@ -260,6 +260,20 @@ button:disabled {
   gap: 10px;
 }
 
+.board-grid {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(7, minmax(40px, 1fr));
+  grid-template-rows: repeat(7, minmax(40px, 1fr));
+  background: #f0ebe0;
+  padding: 6px;
+  border-radius: 16px;
+}
+
+.board-grid .space {
+  min-height: 54px;
+}
+
 .space {
   background: #ffffff;
   border-radius: 12px;
@@ -271,6 +285,13 @@ button:disabled {
 .space.active {
   border-color: #1f6f3c;
   box-shadow: 0 0 0 1px #1f6f3c;
+}
+
+@media (max-width: 900px) {
+  .board-grid {
+    grid-template-columns: repeat(7, minmax(36px, 1fr));
+    grid-template-rows: repeat(7, minmax(36px, 1fr));
+  }
 }
 
 .space.selected {

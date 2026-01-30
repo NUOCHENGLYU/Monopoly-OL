@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { io, Socket } from "socket.io-client";
 
 const SOCKET_URL =
-  import.meta.env.VITE_SOCKET_URL ?? "http://localhost:3001";
+  import.meta.env.VITE_SOCKET_URL ??
+  (import.meta.env.DEV ? "http://localhost:3001" : window.location.origin);
 
 const STORAGE_KEYS = {
   roomCode: "pty_room_code",
@@ -93,6 +94,24 @@ type Screen = "home" | "lobby" | "game";
 
 const BAIL_COST = 50;
 
+const buildRingPositions = (size: number) => {
+  const positions: Array<{ row: number; col: number }> = [];
+  const last = size - 1;
+  for (let col = last; col >= 0; col -= 1) {
+    positions.push({ row: last, col });
+  }
+  for (let row = last - 1; row > 0; row -= 1) {
+    positions.push({ row, col: 0 });
+  }
+  for (let col = 0; col < size; col += 1) {
+    positions.push({ row: 0, col });
+  }
+  for (let row = 1; row < last; row += 1) {
+    positions.push({ row, col: last });
+  }
+  return positions;
+};
+
 const spaceTypeLabels: Record<BoardSpace["type"], string> = {
   START: "起点",
   PROPERTY: "地产",
@@ -149,6 +168,7 @@ export default function App() {
   const [offerPropertyIds, setOfferPropertyIds] = useState<number[]>([]);
   const [requestPropertyIds, setRequestPropertyIds] = useState<number[]>([]);
   const [incomingTrade, setIncomingTrade] = useState<TradeOffer | null>(null);
+  const ringPositions = useMemo(() => buildRingPositions(7), []);
 
   const socket = useMemo<Socket>(
     () => io(SOCKET_URL, { autoConnect: false }),
@@ -446,6 +466,8 @@ export default function App() {
           space.type === "PROPERTY" && space.ownerId === tradeTargetId
       )
     : [];
+  const useRingLayout =
+    !!gameState && gameState.board.length === ringPositions.length;
   const isInJail = currentPlayer?.inJail ?? false;
   const hasMonopoly = (group?: string) => {
     if (!gameState || !playerId || !group) return false;
@@ -665,7 +687,7 @@ export default function App() {
 
             <div className="panel">
               <h3>棋盘格子</h3>
-              <div className="board">
+              <div className={useRingLayout ? "board-grid" : "board"}>
                 {gameState.board.map((space, index) => {
                   const ownerName = space.ownerId
                     ? gameState.players.find((p) => p.id === space.ownerId)?.name
@@ -674,12 +696,23 @@ export default function App() {
                     gameState.players[gameState.currentPlayerIndex]?.position ===
                     index;
                   const selected = selectedSpace?.id === space.id;
+                  const ringPosition = useRingLayout
+                    ? ringPositions[index]
+                    : null;
                   return (
                     <div
                       key={space.id}
                       className={`space ${active ? "active" : ""} ${
                         selected ? "selected" : ""
                       }`}
+                      style={
+                        ringPosition
+                          ? {
+                              gridRow: ringPosition.row + 1,
+                              gridColumn: ringPosition.col + 1
+                            }
+                          : undefined
+                      }
                       onClick={() => setSelectedSpaceId(space.id)}
                     >
                       <div className="space-title">
