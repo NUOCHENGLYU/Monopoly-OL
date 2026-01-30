@@ -12,7 +12,11 @@ export type ServerBundle = {
   httpServer: http.Server;
 };
 
-export function createServer(): ServerBundle {
+export type ServerOptions = {
+  rngSeed?: number;
+};
+
+export function createServer(options?: ServerOptions): ServerBundle {
   const app = express();
 
   app.use(cors());
@@ -29,7 +33,7 @@ export function createServer(): ServerBundle {
     }
   });
 
-  registerRoomHandlers(io);
+  registerRoomHandlers(io, { rngSeed: options?.rngSeed });
 
   return { app, io, httpServer };
 }

@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import type { Server, Socket } from "socket.io";
 
-import { createInitialState } from "@pty/engine";
+import { applyAction, createInitialState, createRng } from "@pty/engine";
 
 const ROOM_CODE_LENGTH = 6;
 const MAX_PLAYERS = 6;
@@ -32,6 +32,7 @@ type Room = {
   hostId: string;
   players: PlayerEntry[];
   gameState: ReturnType<typeof createInitialState> | null;
+  rng: (() => number) | null;
 };
 
 type SocketContext = {
@@ -57,8 +58,20 @@ type ReconnectPayload = {
   playerToken: string;
 };
 
-export function registerRoomHandlers(io: Server) {
+type GameActionPayload = {
+  roomCode?: string;
+  action?: {
+    type?: string;
+  };
+};
+
+type RoomHandlersOptions = {
+  rngSeed?: number;
+};
+
+export function registerRoomHandlers(io: Server, options?: RoomHandlersOptions) {
   const rooms = new Map<string, Room>();
+  const rngSeed = options?.rngSeed;
 
   const emitRoomState = (room: Room) => {
     const payload = { room: sanitizeRoom(room) };
@@ -129,7 +142,8 @@ export function registerRoomHandlers(io: Server) {
         code: roomCode,
         hostId: player.id,
         players: [player],
-        gameState: null
+        gameState: null,
+        rng: null
       };
 
       rooms.set(roomCode, room);
@@ -191,7 +205,7 @@ export function registerRoomHandlers(io: Server) {
       emitRoomState(room);
 
       if (room.gameState === null && allPlayersReady(room)) {
-        startGame(room, io);
+        startGame(room, io, rngSeed);
       }
     });
 
@@ -206,7 +220,56 @@ export function registerRoomHandlers(io: Server) {
       }
       if (room.gameState) return;
 
-      startGame(room, io);
+      startGame(room, io, rngSeed);
+    });
+
+    socket.on("game:action", (payload: GameActionPayload) => {
+      const context = socket.data as SocketContext;
+      const roomCode = context.roomCode ?? payload?.roomCode?.trim().toUpperCase();
+      if (!roomCode || !context.playerId) {
+        sendError(socket, "INVALID_ACTION", "无法识别房间或玩家。");
+        return;
+      }
+
+      const room = rooms.get(roomCode);
+      if (!room) {
+        sendError(socket, "ROOM_NOT_FOUND", "房间不存在。");
+        return;
+      }
+
+      if (!room.gameState) {
+        sendError(socket, "GAME_NOT_STARTED", "游戏尚未开始。");
+        return;
+      }
+
+      const actionType = payload?.action?.type;
+      if (!actionType) {
+        sendError(socket, "INVALID_ACTION", "操作无效。");
+        return;
+      }
+
+      if (
+        actionType !== "ROLL_DICE" &&
+        actionType !== "BUY_CURRENT_SPACE" &&
+        actionType !== "END_TURN"
+      ) {
+        sendError(socket, "INVALID_ACTION", "不支持的操作。");
+        return;
+      }
+
+      const result = applyAction(
+        room.gameState,
+        { type: actionType, playerId: context.playerId },
+        actionType === "ROLL_DICE" ? { rng: room.rng ?? Math.random } : undefined
+      );
+
+      if (result.error) {
+        sendError(socket, result.error.code, result.error.message);
+        return;
+      }
+
+      room.gameState = result.state;
+      io.to(room.code).emit("game:state", { state: room.gameState });
     });
 
     socket.on("disconnect", () => {
@@ -225,10 +288,11 @@ export function registerRoomHandlers(io: Server) {
   });
 }
 
-function startGame(room: Room, io: Server) {
+function startGame(room: Room, io: Server, rngSeed?: number) {
   room.gameState = createInitialState(
     room.players.map((player) => ({ id: player.id, name: player.name }))
   );
+  room.rng = room.rng ?? createRoomRng(rngSeed);
   io.to(room.code).emit("room:state", { room: sanitizeRoom(room) });
   io.to(room.code).emit("game:state", { state: room.gameState });
 }
@@ -283,4 +347,11 @@ function setSocketContext(
   const context = socket.data as SocketContext;
   context.roomCode = roomCode;
   context.playerId = playerId;
+}
+
+function createRoomRng(seed?: number): () => number {
+  if (seed === undefined || Number.isNaN(seed)) {
+    return Math.random;
+  }
+  return createRng(seed);
 }

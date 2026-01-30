@@ -53,6 +53,80 @@ describe("applyAction", () => {
     expect(result.state.lastRoll?.total).toBe(4);
   });
 
+  it("allows buying an unowned property", () => {
+    const board = [
+      { id: 0, name: "Start", type: "START" as const },
+      { id: 1, name: "Test Property", type: "PROPERTY" as const, cost: 100, rentTable: [10] }
+    ];
+    const state = createInitialState([
+      { id: "p1", name: "Alice" },
+      { id: "p2", name: "Bob" }
+    ], { board, startingMoney: 500 });
+
+    const withRoll = {
+      ...state,
+      lastRoll: { d1: 1, d2: 1, total: 2 },
+      players: state.players.map((player, index) =>
+        index === 0 ? { ...player, position: 1 } : player
+      )
+    };
+
+    const result = applyAction(withRoll, {
+      type: "BUY_CURRENT_SPACE",
+      playerId: "p1"
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.state.players[0].money).toBe(400);
+    expect(result.state.board[1].ownerId).toBe("p1");
+  });
+
+  it("charges rent when landing on owned property", () => {
+    const board = [
+      { id: 0, name: "Start", type: "START" as const },
+      { id: 1, name: "Empty", type: "EMPTY" as const },
+      { id: 2, name: "Rent Spot", type: "PROPERTY" as const, cost: 100, rentTable: [50], ownerId: "p2" }
+    ];
+    const state = createInitialState([
+      { id: "p1", name: "Alice" },
+      { id: "p2", name: "Bob" }
+    ], { board, startingMoney: 200 });
+
+    const result = applyAction(
+      state,
+      { type: "ROLL_DICE", playerId: "p1" },
+      { rng: sequenceRng([0, 0]) }
+    );
+
+    expect(result.state.players[0].position).toBe(2);
+    expect(result.state.players[0].money).toBe(150);
+    expect(result.state.players[1].money).toBe(250);
+  });
+
+  it("marks player bankrupt if they cannot pay rent", () => {
+    const board = [
+      { id: 0, name: "Start", type: "START" as const },
+      { id: 1, name: "Empty", type: "EMPTY" as const },
+      { id: 2, name: "Rent Spot", type: "PROPERTY" as const, cost: 100, rentTable: [80], ownerId: "p2" },
+      { id: 3, name: "Owned", type: "PROPERTY" as const, cost: 100, rentTable: [10], ownerId: "p1" }
+    ];
+    const state = createInitialState([
+      { id: "p1", name: "Alice" },
+      { id: "p2", name: "Bob" }
+    ], { board, startingMoney: 50 });
+
+    const result = applyAction(
+      state,
+      { type: "ROLL_DICE", playerId: "p1" },
+      { rng: sequenceRng([0, 0]) }
+    );
+
+    expect(result.state.players[0].position).toBe(2);
+    expect(result.state.players[0].money).toBe(0);
+    expect(result.state.players[0].isBankrupt).toBe(true);
+    expect(result.state.board[3].ownerId).toBe(null);
+  });
+
   it("rejects actions from non-current players", () => {
     const state = createInitialState([
       { id: "p1", name: "Alice" },
